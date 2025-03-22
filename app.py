@@ -8,6 +8,8 @@ import hashlib
 import json
 import os
 from dotenv import load_dotenv
+import requests
+import math
 
 # Carrega as variáveis de ambiente
 load_dotenv()
@@ -16,6 +18,84 @@ load_dotenv()
 SPREADSHEET_ID = os.getenv('SPREADSHEET_ID')
 SHEET_NAME = 'Página1'
 CALENDAR_FILE = 'calendario_pos.ics'
+
+# Coordenadas da UFMA (São Luís)
+UFMA_LAT = -2.5897
+UFMA_LON = -44.2103
+MAX_DISTANCE_KM = 1.0  # Distância máxima permitida em quilômetros
+
+def calcular_distancia(lat1, lon1, lat2, lon2):
+    """
+    Calcula a distância entre dois pontos usando a fórmula de Haversine.
+    Retorna a distância em quilômetros.
+    """
+    R = 6371  # Raio da Terra em quilômetros
+
+    lat1, lon1, lat2, lon2 = map(math.radians, [lat1, lon1, lat2, lon2])
+    
+    dlat = lat2 - lat1
+    dlon = lon2 - lon1
+    
+    a = math.sin(dlat/2)**2 + math.cos(lat1) * math.cos(lat2) * math.sin(dlon/2)**2
+    c = 2 * math.asin(math.sqrt(a))
+    
+    return R * c
+
+def obter_localizacao_ip(ip):
+    """
+    Obtém a localização geográfica de um IP usando a API ip-api.com
+    Retorna um dicionário com latitude e longitude, ou None em caso de erro.
+    """
+    try:
+        response = requests.get(f'http://ip-api.com/json/{ip}')
+        data = response.json()
+        
+        if data['status'] == 'success':
+            return {
+                'latitude': data['lat'],
+                'longitude': data['lon']
+            }
+        return None
+    except Exception as e:
+        st.error(f"Erro ao obter localização: {e}")
+        return None
+
+def verificar_localizacao():
+    """
+    Verifica se o IP do usuário está dentro da área permitida.
+    Retorna True se estiver dentro do limite, False caso contrário.
+    """
+    try:
+        # Obtém o IP do usuário
+        sock = socket.create_connection(("8.8.8.8", 53))
+        ip_address = sock.getsockname()[0]
+        sock.close()
+    except OSError:
+        try:
+            ip_address = socket.gethostbyname(socket.gethostname())
+        except socket.gaierror:
+            st.error("Erro: Não foi possível obter o endereço IP.")
+            return False
+
+    # Obtém a localização do IP
+    localizacao = obter_localizacao_ip(ip_address)
+    if not localizacao:
+        st.error("Não foi possível determinar sua localização.")
+        return False
+
+    # Calcula a distância até a UFMA
+    distancia = calcular_distancia(
+        localizacao['latitude'],
+        localizacao['longitude'],
+        UFMA_LAT,
+        UFMA_LON
+    )
+
+    if distancia > MAX_DISTANCE_KM:
+        st.error(f"Você está muito longe da UFMA. Distância atual: {distancia:.2f} km")
+        return False
+
+    return True
 
 def get_google_credentials():
     """
@@ -122,6 +202,11 @@ def main():
     """
     st.title("Sistema de Registro de Presença")
     st.subheader("Especialização em Gestão Portuária")
+
+    # Verifica a localização do usuário
+    if not verificar_localizacao():
+        st.error("Acesso negado: Você precisa estar próximo à UFMA para registrar sua presença.")
+        return
 
     eventos = ler_datas_do_calendario(CALENDAR_FILE)
     if not eventos:
